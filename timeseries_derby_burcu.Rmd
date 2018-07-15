@@ -1,0 +1,293 @@
+---
+title: "R Notebook"
+output:
+  html_document: default
+  html_notebook: default
+---
+# Exercise 1
+
+## 1) Data Import via SQLite
+
+```{r}
+library(RSQLite)
+setwd("C:/Users/Burcu Kolbay/Downloads")
+sqlite <- dbDriver("SQLite")
+conn <- dbConnect(sqlite, "ex1.db")
+dbListTables(conn)
+
+# extracting tables through the connection created
+holiday <- dbGetQuery(conn, "select * from holiday")
+stock <- dbGetQuery(conn, "select * from stock")
+```
+
+```{r}
+library(dplyr)
+glimpse(stock)
+```
+
+
+```{r}
+glimpse(holiday)
+```
+
+
+## 2) Data Merge
+
+The "stock" and "holiday" data sets are merged by "date" column, and it is named as "whole_data_set".
+ 
+```{r}
+whole_data_set <- merge(stock, holiday, by="date")
+glimpse(whole_data_set)
+```
+
+In "whole_data_set", the "index.x" and "index.y" attributes are removed. 
+
+```{r}
+whole_data_set <- whole_data_set[,-c(2,8)]
+whole_data_set$date <- as.Date(whole_data_set$date)
+```
+
+## 3) Data Type Convertions
+
+The "usa", "uk" and "japan" attributes are binarized. If there is any input in the cell it takes $1$, otherwise $0$.
+
+```{r}
+names(whole_data_set)
+binarizing <- function(x) {
+  x_country <- x[, c(7:9)]
+  x_country[!is.na(x_country)] <- 1
+  x_country[is.na(x_country)] <- 0
+  x_holiday <- cbind(x[, c(1:6)], x_country)
+  return(x_holiday)
+}
+
+whole_data_set <- binarizing(whole_data_set)
+glimpse(whole_data_set)
+```
+
+The "usa", "uk" and "japan" attributes' classes are converted into the factor type.
+
+```{r}
+shouldBeFactor <- c('usa', 'uk', 'japan')
+for(v in shouldBeFactor) {
+  whole_data_set[[v]] <- as.factor(whole_data_set[[v]])
+}
+glimpse(whole_data_set)
+```
+
+## 4) Descriptive Statistics
+
+```{r}
+summary(whole_data_set)
+```
+
+```{r}
+library(reshape)
+library(ggplot2)
+plot_sets<-whole_data_set[,c(2:6)]
+meltData <- melt(plot_sets)
+p <- ggplot(meltData, aes(factor(variable), value))
+p + geom_boxplot() + facet_wrap(~variable, scale="free")
+```
+
+As we can see above, "close_msft"" and "close_appl" has outliers at the expensive area for the stock prices. It shows us that these two can have significant unexpected peaks in their price distribution over the years.
+
+```{r}
+library(tidyr)
+ggplot(gather(plot_sets), aes(value)) + geom_histogram(bins=10) + facet_wrap(~key, scales="free_x")
+```
+
+```{r}
+table(whole_data_set$usa)
+```
+```{r}
+table(whole_data_set$uk)
+```
+
+```{r}
+table(whole_data_set$japan)
+```
+
+Microsoft stock prices:
+
+```{r}
+library(ggplot2)
+ggplot(whole_data_set, aes(date, close_msft)) + geom_line() + scale_x_date('year')
+```
+
+
+Here we can see that stock prices of Microsoft was low at the first half of the 90s, but then it started to increase. It had a peak in 2000. It had some peaks between 2000 and 2010, however it never reached the price it had in 2000. Just before 2010, it has a drop in the prices again. After 2010, it has started to increase, and it reached the highest price. 
+
+Apple stock prices:
+```{r}
+ggplot(whole_data_set, aes(date, close_appl)) + geom_line() + scale_x_date('year')
+```
+
+In the plot above, it is easy to realize that Apple's stock prices were really low until 2005. After 2005, it has started to increase. Sometime it has some drops, however it kept on increasing. If we compare it with Microsoft, we can realize that its value at the end of the data time is doubled Microsoft.
+
+Oracle stock prices:
+
+```{r}
+ggplot(whole_data_set, aes(date, close_orcl)) + geom_line() + scale_x_date('year')
+```
+
+The plot above shows us that Oracle had an amazing peak between 2000 and 2002, and it is kind of similar to Microsoft. However, after that, it had a significant drop. The prices were trying to go back to the level of 2000 until the end of the data time. Recently, the prices came to the same level with 2000 and passed it little bit.
+
+We can state the fact that when the Apple started to increase its stock prices, it effected Microsoft and Oracle badly (This statement is only depend on the data that is provided for this assignment).
+
+```{r}
+cor(plot_sets)
+```
+
+The correlation between "close_dowjones" and "close_nasdaq" is the highest correlation.
+
+```{r}
+library(corrplot)
+corrplot(cor(plot_sets), order = "hclust")
+```
+
+Since the lowest correlation value is 73%, our correlation plot's color sticks to blue.
+
+## 5) close_msft Part
+
+```{r}
+cor(plot_sets)
+```
+
+There is a high correlation between "close_dowjones" and "close_nasdaq" (more than 95% - higher than the other pairs). Thus, "close_nasdaq" is removed.
+
+```{r}
+whole_data_set1 <- whole_data_set[, -6] 
+```
+
+As we can see "uk" does not have any effect because of its distribution.
+
+```{r}
+whole_data_set1 <- whole_data_set1[,-7]
+```
+
+```{r}
+library(randomForest)
+rf <- randomForest(close_msft~., data = whole_data_set1[,-1], ntree=100, keep.forest=F, importance=T)
+importance(rf)
+```
+
+### 5.1) ARIMA 
+
+
+```{r}
+library(tseries)
+dta<- ts(whole_data_set1, frequency = 7)
+raw.result <- lm(close_msft ~ ., data = whole_data_set1)
+adf.test(raw.result$residuals, alternative = "stationary")
+```
+
+The data is stationary.
+
+Since we are taken the other attributes into consideration (not univariate time series), the adf.test is applied on "lm()" results.
+
+Because of the running time for each model for each price, a small sample is used from the data. The first 60 observations is used to predict 15 observations that comes right after the first 60.
+
+```{r}
+train_msft <- dta[1:60,]
+test_msft <- dta[61:75,]
+```
+
+
+The extra attributes are imported using "xreg".
+
+```{r}
+library(forecast)
+covariates_msft <- c("close_orcl", "close_appl", "close_dowjones","usa","japan")
+fit <- auto.arima(train_msft[,"close_msft"], xreg = train_msft[, covariates_msft])
+fcast <- forecast(fit, xreg = test_msft[, covariates_msft])
+accuracy(fcast)
+```
+
+
+```{r}
+tsdisplay(residuals(fit), lag.max = 30, main="(0,1,2) Model Residuals")
+```
+
+Tuning:
+```{r}
+lambda <- BoxCox.lambda(train_msft[,"close_msft"])
+fit_2 <- Arima(train_msft[,"close_msft"], xreg = train_msft[, covariates_msft],  lambda = lambda, order=c(1,2,2)) 
+fcast2 <- forecast(fit_2, xreg = test_msft[, covariates_msft])
+accuracy(fcast2)
+```
+
+### 5.2) Neural Networks
+
+```{r}
+fit_net <- nnetar(train_msft[, "close_msft"], xreg=train_msft[, covariates_msft])
+fcast_net <- forecast(fit_net, PI = TRUE, xreg=test_msft[, covariates_msft] )
+accuracy(fcast_net)
+```
+
+## 6) close_orcl Part
+
+### 6.1) ARIMA
+```{r}
+covariates_orcl <- c("close_msft", "close_appl", "close_dowjones","usa","japan")
+fit <- auto.arima(train_msft[,"close_orcl"], xreg = train_msft[, covariates_orcl])
+fcast <- forecast(fit, xreg = test_msft[, covariates_orcl])
+accuracy(fcast)
+```
+
+
+Tuning:
+```{r}
+lambda <- BoxCox.lambda(train_msft[,"close_orcl"])
+fit_2 <- Arima(train_msft[,"close_orcl"], xreg = train_msft[, covariates_orcl],  lambda = lambda, order=c(1,2,2)) 
+fcast2 <- forecast(fit_2, xreg = test_msft[, covariates_orcl])
+accuracy(fcast2)
+```
+
+### 6.2) Neural Networks
+
+```{r}
+fit_net <- nnetar(train_msft[, "close_orcl"], xreg=train_msft[, covariates_orcl])
+fcast_net <- forecast(fit_net, PI = TRUE, xreg=test_msft[, covariates_orcl] )
+accuracy(fcast_net)
+```
+
+## 7) close_appl
+
+## 7.1) ARIMA
+
+```{r}
+covariates_apple <- c("close_msft", "close_orcl", "close_dowjones","usa","japan")
+fit <- auto.arima(train_msft[,"close_appl"], xreg = train_msft[, covariates_apple])
+fcast <- forecast(fit, xreg = test_msft[, covariates_apple])
+accuracy(fcast)
+```
+
+
+Tuning:
+```{r}
+lambda <- BoxCox.lambda(train_msft[,"close_appl"])
+fit_2 <- Arima(train_msft[,"close_appl"], xreg = train_msft[, covariates_apple],  lambda = lambda, order=c(1,2,2)) 
+fcast2 <- forecast(fit_2, xreg = test_msft[, covariates_apple])
+accuracy(fcast2)
+```
+
+### 7.2) Neural Networks
+
+```{r}
+fit_net <- nnetar(train_msft[, "close_appl"], xreg=train_msft[, covariates_apple])
+fcast_net <- forecast(fit_net, PI = TRUE, xreg=test_msft[, covariates_apple] )
+accuracy(fcast_net)
+```
+
+
+# Conclusion:
+
+For all target stock prices, first auto.arima is used with xreg. Then the auto.arima model is tunned using lambda value that comes from BoxCox.lambda function, which minimizes the coefficient of variation for subseries, and it is a number indicating the Box-Cox transformation parameter. This lambda value helped us to reduce the error in each model for each target stock price. "nnetar" is used as the neural network choice, and that is feed-forward neural network with a single hidden layer and lagged inputs. For all the stock prices, neural network gave the lowest error.
+
+
+# Future Work:
+
+Because of the limited time for this assignment, other neural networks and tuning step could not be applied. I would like to see the results with RNN as well. The simple models are used in order to finish the study before deadline. 
+
+For the future selection step, I would like to add a more advance selection method in order to be sure that I worked with the right attributes. The attribute selection in this study is done using only correlations information.
